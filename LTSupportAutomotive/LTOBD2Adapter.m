@@ -85,6 +85,8 @@ NSString* const LTOBD2AdapterDidUpdateState = @"LTOBD2AdapterDidUpdateState";
 NSString* const LTOBD2AdapterDidOpenStream = @"LTOBD2AdapterDidOpenStream";
 NSString* const LTOBD2AdapterDidSend = @"LTOBD2AdapterDidSend";
 NSString* const LTOBD2AdapterDidReceive = @"LTOBD2AdapterDidReceive";
+//Skyborg
+NSString* const LTOBD2AdapterQueue = @"LTOBD2AdapterQueue";
 
 @implementation LTOBD2Adapter
 {
@@ -96,6 +98,8 @@ NSString* const LTOBD2AdapterDidReceive = @"LTOBD2AdapterDidReceive";
     
     NSMutableData* _receiveBuffer;
     BOOL _hasPendingAnswer;
+    //Skyborg
+    NSNumber* _internalCommandQueue;
     
     LTOBD2Protocol* _adapterProtocol;
     NSTimer* _heartbeatTimer;
@@ -669,7 +673,18 @@ NSString* const LTOBD2AdapterDidReceive = @"LTOBD2AdapterDidReceive";
 -(void)asyncEnqueueInternalCommand:(LTOBD2AdapterInternalCommand*)internalCommand
 {
     [_commandQueue addObject:internalCommand];
+    //Skyborg
+    _internalCommandQueue = @([_commandQueue count]);
+    [[NSNotificationCenter defaultCenter] postNotificationName:LTOBD2AdapterQueue object:@([_commandQueue count])];
+    //End Skyborg
     [self asyncProcessCommandQueue];
+    
+    //Skyborg
+    if ( [_commandQueue count] > 500 )
+    {
+        NSLog( @"cancelPendingCommands : Has more than 500" );
+        [self cancelPendingCommands];
+    }
 }
 
 @end
