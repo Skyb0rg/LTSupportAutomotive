@@ -638,6 +638,13 @@ typedef enum : NSUInteger {
 
 @end
 
+//Skyborg
+@interface LTOBD2PID_ENGINE_OIL_TEMP_67 : LTOBD2PIDSingleByteTemperature
+
++(instancetype)pid NS_UNAVAILABLE;
+
+@end
+
 #pragma mark -
 #pragma mark Mode 03 – Show stored Diagnostic Trouble Codes
 
