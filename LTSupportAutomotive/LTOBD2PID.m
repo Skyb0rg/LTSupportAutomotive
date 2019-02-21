@@ -1670,6 +1670,10 @@
 }
 
 @end
+	
+//Skyborg
+@implementation LTOBD2PID_ENGINE_OIL_TEMP_67
+@end
 
 #pragma mark -
 #pragma mark Mode 03 – Show stored Diagnostic Trouble Codes
