@@ -47,6 +47,8 @@ extern NSString* const LTOBD2AdapterDidUpdateState;
 extern NSString* const LTOBD2AdapterDidOpenStream;
 extern NSString* const LTOBD2AdapterDidSend;
 extern NSString* const LTOBD2AdapterDidReceive;
+//Skyborg
+extern NSString* const LTOBD2AdapterQueue;
 
 @interface LTOBD2Adapter : NSObject <NSStreamDelegate>
 
