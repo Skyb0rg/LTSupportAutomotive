@@ -201,6 +201,7 @@ NSString* const LTBTLESerialTransporterDidUpdateSignalStrength = @"LTBTLESerialT
         [_inputStream close];
         [_outputStream close];
     }
+    [central connectPeripheral:peripheral options:nil];
 }
 
 #pragma mark -
