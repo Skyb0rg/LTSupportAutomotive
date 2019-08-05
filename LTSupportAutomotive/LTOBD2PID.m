@@ -930,17 +930,19 @@
     
     [self.cookedResponse enumerateKeysAndObjectsUsingBlock:^(NSString * _Nonnull ecu, NSArray<NSNumber *> * _Nonnull bytes, BOOL * _Nonnull stop) {
         
-        uint A = bytes[0].unsignedIntValue;
-        uint B = bytes[1].unsignedIntValue;
+        if ( bytes.count > 1 ) {
+            uint A = bytes[0].unsignedIntValue;
+            uint B = bytes[1].unsignedIntValue;
         
-        if ( (A + B) )
-        {
-            
-            NSString* code = [self dtcCodeForA:A B:B];
-            LTOBD2DTC* dtc = [LTOBD2DTC dtcWithCode:code ecu:ecu freezeFrame:self.freezeFrame];
-            if ( dtc )
+            if ( (A + B) )
             {
-                [ma addObject:dtc];
+                
+                NSString* code = [self dtcCodeForA:A B:B];
+                LTOBD2DTC* dtc = [LTOBD2DTC dtcWithCode:code ecu:ecu freezeFrame:self.freezeFrame];
+                if ( dtc )
+                {
+                    [ma addObject:dtc];
+                }
             }
         }
     }];
