@@ -645,6 +645,11 @@ typedef enum : NSUInteger {
 
 @end
 
+@interface LTOBD2PID_PORSCHEENGINE_OIL_TEMP_441 : LTOBD2PIDSingleByteTemperature
+
++(instancetype)pid NS_UNAVAILABLE;
+
+@end
 #pragma mark -
 #pragma mark Mode 03 – Show stored Diagnostic Trouble Codes
 
