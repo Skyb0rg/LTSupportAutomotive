@@ -119,7 +119,7 @@ typedef NSDictionary<NSString*,NSArray<NSString*>*> RequestResponseDictionary;
 
 -(BOOL)sendCommand:(LTOBD2Command*)command
 {
-    dispatch_async( dispatch_get_current_queue(), ^{
+//    dispatch_async( dispatch_get_current_queue(), ^{
 
         if ( [command.commandString hasPrefix:@"AT"] )
         {
@@ -130,7 +130,7 @@ typedef NSDictionary<NSString*,NSArray<NSString*>*> RequestResponseDictionary;
             [self processPidCommand:command];
         }
 
-    });
+//    });
 
     return YES;
 }
