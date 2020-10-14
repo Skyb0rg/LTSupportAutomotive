@@ -2,7 +2,7 @@
 //  Copyright (c) Dr. Michael Lauer Information Technology. All rights reserved.
 //
 
-#import "LTOBD2AdapterELM327.h"
+#import <LTOBD2AdapterELM327.h>
 
 @class LTOBD2CaptureFile;
 
