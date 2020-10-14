@@ -2,9 +2,9 @@
 //  Copyright (c) Dr. Michael Lauer Information Technology. All rights reserved.
 //
 
-#import "LTOBD2Adapter.h"
+#import <LTOBD2Adapter.h>
 
-#import "LTOBD2Command.h"
+#import <LTOBD2Command.h>
 
 NS_ASSUME_NONNULL_BEGIN
 
