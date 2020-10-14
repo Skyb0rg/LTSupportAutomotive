@@ -4,7 +4,7 @@
 
 #import <Foundation/Foundation.h>
 
-#import "LTOBD2Adapter.h"
+#import <LTOBD2Adapter.h>
 
 NS_ASSUME_NONNULL_BEGIN
 
