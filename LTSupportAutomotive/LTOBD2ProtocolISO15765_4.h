@@ -2,7 +2,7 @@
 //  Copyright (c) Dr. Michael Lauer Information Technology. All rights reserved.
 //
 
-#import "LTOBD2Protocol.h"
+#import <LTOBD2Protocol.h>
 
 /* OBD2 Protocols P6, P7, P8, P9 */
 
