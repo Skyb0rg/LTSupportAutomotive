@@ -190,7 +190,8 @@
 
 +(instancetype)dummyCommand
 {
-    return [[self alloc] init];
+    NSString* dummyString = NSStringFromClass(self.class);
+    return [[self alloc] initWithString:dummyString];
 }
 
 @end
