@@ -10,6 +10,11 @@
 #import "LTBTLEWriteCharacteristicStream.h"
 
 NSString* const LTBTLESerialTransporterDidUpdateSignalStrength = @"LTBTLESerialTransporterDidUpdateSignalStrength";
+NSString* const LTBTLESerialTransporterDidStopScanning = @"LTBTLESerialTransporterDidStopScanning";
+NSString* const LTBTLESerialTransporterDidStartScanning = @"LTBTLESerialTransporterDidStartScanning";
+NSString* const LTBTLESerialTransporterDidDiscoverPeripheral = @"LTBTLESerialTransporterDidDiscoverPeripheral";
+NSString* const LTBTLESerialTransporterConnectedPeripherals = @"LTBTLESerialTransporterConnectedPeripherals";
+NSString* const LTBTLESerialTransporterSuccessfullConnectedPeripheral = @"LTBTLESerialTransporterSuccessfullConnectedPeripheral";
 
 //#define DEBUG_THIS_FILE
 
@@ -24,6 +29,7 @@ NSString* const LTBTLESerialTransporterDidUpdateSignalStrength = @"LTBTLESerialT
     CBCentralManager* _manager;
     NSUUID* _identifier;
     NSArray<CBUUID*>* _serviceUUIDs;
+    BOOL _useServiceID;
     CBPeripheral* _adapter;
     CBCharacteristic* _reader;
     CBCharacteristic* _writer;
@@ -57,6 +63,7 @@ NSString* const LTBTLESerialTransporterDidUpdateSignalStrength = @"LTBTLESerialT
     
     _identifier = identifier;
     _serviceUUIDs = serviceUUIDs;
+    _useServiceID = false;
     
     _dispatchQueue = LTSupportAutomotive_backgroundQueue();
     _possibleAdapters = [NSMutableArray array];
@@ -158,10 +165,16 @@ NSString* const LTBTLESerialTransporterDidUpdateSignalStrength = @"LTBTLESerialT
     if ( !peripherals.count )
     {
         // some devices are not advertising the service ID, hence we need to scan for all services
-        [_manager scanForPeripheralsWithServices:nil options:nil];
+        if ( _useServiceID ) {
+            [_manager scanForPeripheralsWithServices: _serviceUUIDs options:nil];
+        } else {
+            [_manager scanForPeripheralsWithServices:nil options:nil];
+        }
+        [[NSNotificationCenter defaultCenter] postNotificationName:LTBTLESerialTransporterDidStartScanning object:nil];
         return;
     }
     
+    [[NSNotificationCenter defaultCenter] postNotificationName:LTBTLESerialTransporterConnectedPeripherals object:peripherals];
     _adapter = peripherals.firstObject;
     _adapter.delegate = self;
     LOG( @"DISCOVER (cached) %@", _adapter );
@@ -179,6 +192,8 @@ NSString* const LTBTLESerialTransporterDidUpdateSignalStrength = @"LTBTLESerialT
     LOG( @"DISCOVER %@ (RSSI=%@) w/ advertisement %@", peripheral, RSSI, advertisementData );
     [_possibleAdapters addObject:peripheral];
     peripheral.delegate = self;
+    
+    [[NSNotificationCenter defaultCenter] postNotificationName:LTBTLESerialTransporterDidDiscoverPeripheral object:[NSMutableArray arrayWithObjects:peripheral,advertisementData, nil]];
     [_manager connectPeripheral:peripheral options:nil];
 }
 
@@ -200,8 +215,8 @@ NSString* const LTBTLESerialTransporterDidUpdateSignalStrength = @"LTBTLESerialT
     {
         [_inputStream close];
         [_outputStream close];
+        [central connectPeripheral:peripheral options:nil];
     }
-    [central connectPeripheral:peripheral options:nil];
 }
 
 #pragma mark -
@@ -247,6 +262,7 @@ NSString* const LTBTLESerialTransporterDidUpdateSignalStrength = @"LTBTLESerialT
     if ( _manager.isScanning )
     {
         [_manager stopScan];
+        [[NSNotificationCenter defaultCenter] postNotificationName:LTBTLESerialTransporterDidStopScanning object:self];
     }
     
     CBService* atCommChannel = peripheral.services.firstObject;
@@ -326,6 +342,7 @@ NSString* const LTBTLESerialTransporterDidUpdateSignalStrength = @"LTBTLESerialT
 {
     _connectionBlock( nil, nil );
     _connectionBlock = nil;
+    [[NSNotificationCenter defaultCenter] postNotificationName:LTBTLESerialTransporterSuccessfullConnectedPeripheral object:_adapter];
 }
 
 @end
