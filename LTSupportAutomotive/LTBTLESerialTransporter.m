@@ -336,13 +336,13 @@ NSString* const LTBTLESerialTransporterSuccessfullConnectedPeripheral = @"LTBTLE
     _outputStream = [[LTBTLEWriteCharacteristicStream alloc] initToCharacteristic:_writer];
     _connectionBlock( _inputStream, _outputStream );
     _connectionBlock = nil;
+    [[NSNotificationCenter defaultCenter] postNotificationName:LTBTLESerialTransporterSuccessfullConnectedPeripheral object:_adapter];
 }
 
 -(void)connectionAttemptFailed
 {
     _connectionBlock( nil, nil );
     _connectionBlock = nil;
-    [[NSNotificationCenter defaultCenter] postNotificationName:LTBTLESerialTransporterSuccessfullConnectedPeripheral object:_adapter];
 }
 
 @end
