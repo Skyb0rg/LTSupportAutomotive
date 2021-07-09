@@ -9,12 +9,18 @@
 NS_ASSUME_NONNULL_BEGIN
 
 extern NSString* const LTBTLESerialTransporterDidUpdateSignalStrength;
+extern NSString* const LTBTLESerialTransporterDidStopScanning;
+extern NSString* const LTBTLESerialTransporterDidStartScanning;
+extern NSString* const LTBTLESerialTransporterDidDiscoverPeripheral;
+extern NSString* const LTBTLESerialTransporterConnectedPeripherals;
+extern NSString* const LTBTLESerialTransporterSuccessfullConnectedPeripheral;
 
 typedef void(^LTBTLESerialTransporterConnectionBlock)(NSInputStream* _Nullable inputStream, NSOutputStream* _Nullable outputStream);
 
 @interface LTBTLESerialTransporter : NSObject <CBCentralManagerDelegate, CBPeripheralDelegate>
 
 @property(strong,nonatomic,readonly) NSNumber* signalStrength;
+@property(nonatomic, assign) BOOL useServiceID;
 
 +(instancetype)transporterWithIdentifier:(nullable NSUUID*)identifier serviceUUIDs:(NSArray<CBUUID*>*)serviceUUIDs;
 -(void)connectWithBlock:(LTBTLESerialTransporterConnectionBlock)block;
