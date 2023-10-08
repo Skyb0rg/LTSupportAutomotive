@@ -1,7 +1,10 @@
 # Status #
 
-This library is pretty much in bugfix-only mode. The reason for that is that my work on Unified Diagnostic Services (UDS), which I originally planned to carry out here, proved to be unworkable – see [this comment](https://github.com/mickeyl/LTSupportAutomotive/issues/35#issuecomment-808062461) for more details.
-Work on the successor is being done while we speak. It's too much of a construction site to already release it now, but I plan to commit the new library asap.
+This library is stable and by now pretty much in _bugfix-only_ mode. The reason for that is that the support for Unified Diagnostic Services (UDS) (which I originally planned to implement in this library) proved to be unworkable – see [this comment](https://github.com/mickeyl/LTSupportAutomotive/issues/35#issuecomment-808062461) for more details.
+
+If your priority is full OBD2 coverage, you can (and should) still continue to use this library. It works great with both Objective-C and Swift
+(in particular the [SPM branch](https://github.com/mickeyl/LTSupportAutomotive/tree/SPM)).
+If your priority is UDS though, I might have something proprietary for you. If you aren't shy of licensing a closed source library, please contact me in private.
 
 # Introduction #
 
@@ -75,6 +78,7 @@ I have tested this library myself with the following adapters (Note that none of
 * LELink Bluetooth Low Energy
 * VGate iCar Pro BLE4.0 Dual
 * WGSoft.de UniCarScan UCSI-2000
+* WGSoft.de UniCarScan UCSI-2100
 
 ### WiFi ###
 * EXZA® SUPER Mini WiFi WLAN OBD 2
@@ -83,6 +87,7 @@ I have tested this library myself with the following adapters (Note that none of
 
 ### USB ###
 * SCANTOOL OBDLINK SX (STN1130)
+* SCANTOOL OBDLINK EX (STN2230)
 
 # Enhancements #
 
