@@ -25,6 +25,8 @@ typedef void(^LTBTLESerialTransporterConnectionBlock)(NSInputStream* _Nullable i
 +(instancetype)transporterWithIdentifier:(nullable NSUUID*)identifier serviceUUIDs:(NSArray<CBUUID*>*)serviceUUIDs;
 -(void)connectWithBlock:(LTBTLESerialTransporterConnectionBlock)block;
 -(void)disconnect;
+/// Call after `LTOBD2Adapter.disconnect` closed streams handed off at connect time.
+-(void)noteAdapterClosedStreams;
 
 -(void)startUpdatingSignalStrengthWithInterval:(NSTimeInterval)interval;
 -(void)stopUpdatingSignalStrength;

@@ -200,9 +200,13 @@ NSString* const LTOBD2AdapterQueue = @"LTOBD2AdapterQueue";
 -(void)connect
 {
     [self advanceAdapterStateTo:OBD2AdapterStateDiscovering];
-    
-    [_inputStream scheduleInRunLoop:[NSRunLoop currentRunLoop] forMode:NSDefaultRunLoopMode];
-    [_outputStream scheduleInRunLoop:[NSRunLoop currentRunLoop] forMode:NSDefaultRunLoopMode];
+
+    // ExternalAccessory (MFi) run-loop sources are PAC-sensitive. Scheduling on a GCD
+    // worker's currentRunLoop (e.g. OBDSerialQueue) causes EXC_BREAKPOINT in
+    // EAInputStream open/close. Always use the main run loop.
+    NSRunLoop* runLoop = [NSRunLoop mainRunLoop];
+    [_inputStream scheduleInRunLoop:runLoop forMode:NSDefaultRunLoopMode];
+    [_outputStream scheduleInRunLoop:runLoop forMode:NSDefaultRunLoopMode];
     
     [_inputStream open];
     [_outputStream open];
@@ -212,11 +216,43 @@ NSString* const LTOBD2AdapterQueue = @"LTOBD2AdapterQueue";
 {
     [_heartbeatTimer invalidate];
     _heartbeatTimer = nil;
-    
-    [_inputStream close];
+
+    NSInputStream* input = _inputStream;
+    NSOutputStream* output = _outputStream;
     _inputStream = nil;
-    [_outputStream close];
     _outputStream = nil;
+
+    void (^closeStreams)(void) = ^{
+        NSRunLoop* runLoop = [NSRunLoop mainRunLoop];
+        if ( input )
+        {
+            [input removeFromRunLoop:runLoop forMode:NSDefaultRunLoopMode];
+            if ( input.streamStatus != NSStreamStatusClosed
+                && input.streamStatus != NSStreamStatusNotOpen )
+            {
+                [input close];
+            }
+        }
+        if ( output )
+        {
+            [output removeFromRunLoop:runLoop forMode:NSDefaultRunLoopMode];
+            if ( output.streamStatus != NSStreamStatusClosed
+                && output.streamStatus != NSStreamStatusNotOpen )
+            {
+                [output close];
+            }
+        }
+    };
+
+    if ( [NSThread isMainThread] )
+    {
+        closeStreams();
+    }
+    else
+    {
+        // Synchronize so callers on OBDSerialQueue do not release EASession mid-close.
+        dispatch_sync( dispatch_get_main_queue(), closeStreams );
+    }
     
     [_logFile closeFile];
     _logFile = nil;

@@ -61,6 +61,11 @@
     return _delegate;
 }
 
+-(NSStreamStatus)streamStatus
+{
+    return _status;
+}
+
 -(void)open
 {
     _status = NSStreamStatusOpening;

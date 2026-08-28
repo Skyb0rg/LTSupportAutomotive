@@ -41,6 +41,7 @@ NSString* const LTBTLESerialTransporterSuccessfullConnectedPeripheral = @"LTBTLE
     LTBTLESerialTransporterConnectionBlock _connectionBlock;
     LTBTLEReadCharacteristicStream* _inputStream;
     LTBTLEWriteCharacteristicStream* _outputStream;
+    BOOL _adapterOwnsStreams;
     
     NSNumber* _signalStrength;
     NSTimer* _signalStrengthUpdateTimer;
@@ -88,12 +89,25 @@ NSString* const LTBTLESerialTransporterSuccessfullConnectedPeripheral = @"LTBTLE
     _manager = [[CBCentralManager alloc] initWithDelegate:self queue:_dispatchQueue options:nil];
 }
 
+-(void)noteAdapterClosedStreams
+{
+    _adapterOwnsStreams = NO;
+    _inputStream = nil;
+    _outputStream = nil;
+}
+
 -(void)disconnect
 {
     [self stopUpdatingSignalStrength];
     
-    [_inputStream close];
-    [_outputStream close];
+    if ( ! _adapterOwnsStreams )
+    {
+        [_inputStream close];
+        [_outputStream close];
+    }
+    _inputStream = nil;
+    _outputStream = nil;
+    _adapterOwnsStreams = NO;
     
     if ( _adapter )
     {
@@ -213,8 +227,14 @@ NSString* const LTBTLESerialTransporterSuccessfullConnectedPeripheral = @"LTBTLE
     LOG( @"Did disconnect %@: %@", peripheral, error );
     if ( peripheral == _adapter )
     {
-        [_inputStream close];
-        [_outputStream close];
+        if ( ! _adapterOwnsStreams )
+        {
+            [_inputStream close];
+            [_outputStream close];
+        }
+        _inputStream = nil;
+        _outputStream = nil;
+        _adapterOwnsStreams = NO;
         [central connectPeripheral:peripheral options:nil];
     }
 }
@@ -334,6 +354,7 @@ NSString* const LTBTLESerialTransporterSuccessfullConnectedPeripheral = @"LTBTLE
 {
     _inputStream = [[LTBTLEReadCharacteristicStream alloc] initWithCharacteristic:_reader];
     _outputStream = [[LTBTLEWriteCharacteristicStream alloc] initToCharacteristic:_writer];
+    _adapterOwnsStreams = YES;
     _connectionBlock( _inputStream, _outputStream );
     _connectionBlock = nil;
     [[NSNotificationCenter defaultCenter] postNotificationName:LTBTLESerialTransporterSuccessfullConnectedPeripheral object:_adapter];
