@@ -158,16 +158,16 @@ NSString* const LTBTLESerialTransporterSuccessfullConnectedPeripheral = @"LTBTLE
     if ( peripherals.count )
     {
         LOG( @"CONNECTED (already) %@", _adapter );
-        if ( _adapter.state == CBPeripheralStateConnected )
+        CBPeripheral* peripheral = peripherals.firstObject;
+        if ( peripheral.state == CBPeripheralStateConnected )
         {
-            _adapter = peripherals.firstObject;
-            _adapter.delegate = self;
-            [self peripheral:_adapter didDiscoverServices:nil];
+            peripheral.delegate = self;
+            [self peripheral:peripheral didDiscoverServices:nil];
         }
         else
         {
-            [_possibleAdapters addObject:peripherals.firstObject];
-            [self centralManager:central didDiscoverPeripheral:peripherals.firstObject advertisementData:@{} RSSI:@127];
+            [_possibleAdapters addObject:peripheral];
+            [self centralManager:central didDiscoverPeripheral:peripheral advertisementData:@{} RSSI:@127];
         }
         return;
     }
@@ -189,10 +189,10 @@ NSString* const LTBTLESerialTransporterSuccessfullConnectedPeripheral = @"LTBTLE
     }
     
     [[NSNotificationCenter defaultCenter] postNotificationName:LTBTLESerialTransporterConnectedPeripherals object:peripherals];
-    _adapter = peripherals.firstObject;
-    _adapter.delegate = self;
-    LOG( @"DISCOVER (cached) %@", _adapter );
-    [_manager connectPeripheral:_adapter options:nil];
+    CBPeripheral* peripheral = peripherals.firstObject;
+    peripheral.delegate = self;
+    LOG( @"DISCOVER (cached) %@", peripheral );
+    [_manager connectPeripheral:peripheral options:nil];
 }
 
 -(void)centralManager:(CBCentralManager *)central didDiscoverPeripheral:(CBPeripheral*)peripheral advertisementData:(NSDictionary<NSString *,id> *)advertisementData RSSI:(NSNumber *)RSSI
@@ -256,9 +256,9 @@ NSString* const LTBTLESerialTransporterSuccessfullConnectedPeripheral = @"LTBTLE
 
 -(void)peripheral:(CBPeripheral *)peripheral didDiscoverServices:(NSError *)error
 {
-    if ( _adapter )
+    if ( _reader && _writer )
     {
-        LOG( @"[IGNORING] SERVICES %@: %@", peripheral, peripheral.services );
+        LOG( @"[IGNORING] SERVICES %@: %@ (streams ready)", peripheral, peripheral.services );
         return;
     }
     
