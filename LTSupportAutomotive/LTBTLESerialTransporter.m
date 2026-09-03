@@ -45,6 +45,11 @@ NSString* const LTBTLESerialTransporterSuccessfullConnectedPeripheral = @"LTBTLE
     
     NSNumber* _signalStrength;
     NSTimer* _signalStrengthUpdateTimer;
+    
+    // RSSI-based selection when multiple identifiers are provided
+    BOOL _rssiSelectionActive;
+    NSMutableDictionary<NSUUID*, NSNumber*>* _rssiByPeripheral;
+    NSMutableArray<CBPeripheral*>* _connectedCandidates;
 }
 
 #pragma mark -
@@ -195,8 +200,15 @@ NSString* const LTBTLESerialTransporterSuccessfullConnectedPeripheral = @"LTBTLE
     }
     
     [[NSNotificationCenter defaultCenter] postNotificationName:LTBTLESerialTransporterConnectedPeripherals object:peripherals];
-    // Offer every known peripheral a connect — typically only the powered dongle succeeds.
-    // First peripheral that exposes serial characteristics becomes `_adapter`.
+    
+    // When multiple known peripherals exist, use RSSI to pick the closest one.
+    if ( peripherals.count > 1 )
+    {
+        _rssiSelectionActive = YES;
+        _rssiByPeripheral = [NSMutableDictionary dictionary];
+        _connectedCandidates = [NSMutableArray array];
+    }
+    
     for ( CBPeripheral* peripheral in peripherals )
     {
         if ( ![_possibleAdapters containsObject:peripheral] )
@@ -228,6 +240,19 @@ NSString* const LTBTLESerialTransporterSuccessfullConnectedPeripheral = @"LTBTLE
 -(void)centralManager:(CBCentralManager *)central didConnectPeripheral:(CBPeripheral *)peripheral
 {
     LOG( @"CONNECT %@", peripheral );
+    
+    if ( _rssiSelectionActive && !_adapter )
+    {
+        [_connectedCandidates addObject:peripheral];
+        [peripheral readRSSI];
+        
+        // Schedule selection after a short window so multiple peripherals can report RSSI.
+        // Each new connect resets the timer to allow late responders.
+        [NSObject cancelPreviousPerformRequestsWithTarget:self selector:@selector(selectBestRSSICandidate) object:nil];
+        [self performSelector:@selector(selectBestRSSICandidate) withObject:nil afterDelay:1.5];
+        return;
+    }
+    
     [peripheral discoverServices:_serviceUUIDs];
 }
 
@@ -261,6 +286,14 @@ NSString* const LTBTLESerialTransporterSuccessfullConnectedPeripheral = @"LTBTLE
     if ( error )
     {
         LOG( @"Could not read signal strength for %@: %@", peripheral, error );
+        return;
+    }
+    
+    // Store RSSI for candidate selection
+    if ( _rssiSelectionActive && !_adapter )
+    {
+        _rssiByPeripheral[peripheral.identifier] = RSSI;
+        LOG( @"RSSI candidate %@ = %@", peripheral.name ?: peripheral.identifier, RSSI );
         return;
     }
     
@@ -371,6 +404,59 @@ NSString* const LTBTLESerialTransporterSuccessfullConnectedPeripheral = @"LTBTLE
 
 #pragma mark -
 #pragma mark Helpers
+
+-(void)selectBestRSSICandidate
+{
+    if ( _adapter )
+    {
+        // Already committed to an adapter (e.g. only one responded).
+        return;
+    }
+    
+    _rssiSelectionActive = NO;
+    
+    // Sort connected candidates by RSSI (highest = closest).
+    CBPeripheral* best = nil;
+    NSInteger bestRSSI = -999;
+    
+    for ( CBPeripheral* candidate in _connectedCandidates )
+    {
+        NSNumber* rssi = _rssiByPeripheral[candidate.identifier];
+        NSInteger value = rssi ? rssi.integerValue : -999;
+        LOG( @"RSSI selection: %@ (%@) = %ld", candidate.name ?: candidate.identifier.UUIDString, candidate.identifier, (long)value );
+        if ( value > bestRSSI )
+        {
+            bestRSSI = value;
+            best = candidate;
+        }
+    }
+    
+    if ( !best && _connectedCandidates.count )
+    {
+        // No RSSI data — fall back to first connected.
+        best = _connectedCandidates.firstObject;
+    }
+    
+    if ( best )
+    {
+        LOG( @"RSSI winner: %@ (RSSI=%ld)", best.name ?: best.identifier.UUIDString, (long)bestRSSI );
+        [best discoverServices:_serviceUUIDs];
+        
+        // Disconnect the losers.
+        for ( CBPeripheral* candidate in _connectedCandidates )
+        {
+            if ( candidate != best )
+            {
+                LOG( @"RSSI disconnect loser: %@", candidate.name ?: candidate.identifier.UUIDString );
+                [_manager cancelPeripheralConnection:candidate];
+                [_possibleAdapters removeObject:candidate];
+            }
+        }
+    }
+    
+    _connectedCandidates = nil;
+    _rssiByPeripheral = nil;
+}
 
 -(void)connectionAttemptSucceeded
 {
