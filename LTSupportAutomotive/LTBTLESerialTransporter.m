@@ -109,6 +109,8 @@ NSString* const LTBTLESerialTransporterSuccessfullConnectedPeripheral = @"LTBTLE
 
 -(void)disconnect
 {
+    [NSObject cancelPreviousPerformRequestsWithTarget:self selector:@selector(selectBestRSSICandidate) object:nil];
+    _rssiSelectionActive = NO;
     [self stopUpdatingSignalStrength];
     
     if ( ! _adapterOwnsStreams )
@@ -165,60 +167,58 @@ NSString* const LTBTLESerialTransporterSuccessfullConnectedPeripheral = @"LTBTLE
     {
         return;
     }
-    NSArray<CBPeripheral*>* peripherals = [_manager retrieveConnectedPeripheralsWithServices:_serviceUUIDs];
-    if ( peripherals.count )
+
+    // Pair-new / first connect: keep the fast path for an already-connected serial peripheral.
+    // Known-ID reconnect skips this — CoreBluetooth often still reports a zombie link.
+    if ( !_identifiers.count )
     {
-        LOG( @"CONNECTED (already) %@", _adapter );
-        CBPeripheral* peripheral = peripherals.firstObject;
-        if ( peripheral.state == CBPeripheralStateConnected )
+        NSArray<CBPeripheral*>* already = [_manager retrieveConnectedPeripheralsWithServices:_serviceUUIDs];
+        if ( already.count )
         {
-            peripheral.delegate = self;
-            [self peripheral:peripheral didDiscoverServices:nil];
+            LOG( @"CONNECTED (already) %@", already.firstObject );
+            CBPeripheral* peripheral = already.firstObject;
+            if ( peripheral.state == CBPeripheralStateConnected )
+            {
+                peripheral.delegate = self;
+                [self peripheral:peripheral didDiscoverServices:nil];
+            }
+            else
+            {
+                [_possibleAdapters addObject:peripheral];
+                [self centralManager:central didDiscoverPeripheral:peripheral advertisementData:@{} RSSI:@127];
+            }
+            return;
         }
-        else
-        {
-            [_possibleAdapters addObject:peripheral];
-            [self centralManager:central didDiscoverPeripheral:peripheral advertisementData:@{} RSSI:@127];
-        }
-        return;
     }
-    
+
+    NSArray<CBPeripheral*>* peripherals = nil;
     if ( _identifiers.count )
     {
         peripherals = [_manager retrievePeripheralsWithIdentifiers:_identifiers];
-    }
-    if ( !peripherals.count )
-    {
-        // some devices are not advertising the service ID, hence we need to scan for all services
-        if ( _useServiceID ) {
-            [_manager scanForPeripheralsWithServices: _serviceUUIDs options:nil];
-        } else {
-            [_manager scanForPeripheralsWithServices:nil options:nil];
+        [[NSNotificationCenter defaultCenter] postNotificationName:LTBTLESerialTransporterConnectedPeripherals object:peripherals];
+        if ( peripherals.count > 1 )
+        {
+            _rssiSelectionActive = YES;
+            _rssiByPeripheral = [NSMutableDictionary dictionary];
+            _connectedCandidates = [NSMutableArray array];
         }
-        [[NSNotificationCenter defaultCenter] postNotificationName:LTBTLESerialTransporterDidStartScanning object:nil];
+        for ( CBPeripheral* peripheral in peripherals )
+        {
+            if ( ![_possibleAdapters containsObject:peripheral] )
+            {
+                [_possibleAdapters addObject:peripheral];
+            }
+            peripheral.delegate = self;
+            LOG( @"DISCOVER (cached) %@", peripheral );
+            [_manager connectPeripheral:peripheral options:nil];
+        }
+        // Cached connect often hangs on a stale peripheral. Also scan ads, but only
+        // `didDiscover` identifiers that are on the MRU list (never unknown dongles).
+        [self startAdvertisementScan];
         return;
     }
-    
-    [[NSNotificationCenter defaultCenter] postNotificationName:LTBTLESerialTransporterConnectedPeripherals object:peripherals];
-    
-    // When multiple known peripherals exist, use RSSI to pick the closest one.
-    if ( peripherals.count > 1 )
-    {
-        _rssiSelectionActive = YES;
-        _rssiByPeripheral = [NSMutableDictionary dictionary];
-        _connectedCandidates = [NSMutableArray array];
-    }
-    
-    for ( CBPeripheral* peripheral in peripherals )
-    {
-        if ( ![_possibleAdapters containsObject:peripheral] )
-        {
-            [_possibleAdapters addObject:peripheral];
-        }
-        peripheral.delegate = self;
-        LOG( @"DISCOVER (cached) %@", peripheral );
-        [_manager connectPeripheral:peripheral options:nil];
-    }
+
+    [self startAdvertisementScan];
 }
 
 -(void)centralManager:(CBCentralManager *)central didDiscoverPeripheral:(CBPeripheral*)peripheral advertisementData:(NSDictionary<NSString *,id> *)advertisementData RSSI:(NSNumber *)RSSI
@@ -228,10 +228,27 @@ NSString* const LTBTLESerialTransporterSuccessfullConnectedPeripheral = @"LTBTLE
         LOG( @"[IGNORING] DISCOVER %@ (RSSI=%@) w/ advertisement %@", peripheral, RSSI, advertisementData );
         return;
     }
+
+    if ( _identifiers.count && ![_identifiers containsObject:peripheral.identifier] )
+    {
+        LOG( @"[IGNORING] DISCOVER unknown %@ (not in MRU)", peripheral );
+        return;
+    }
     
     LOG( @"DISCOVER %@ (RSSI=%@) w/ advertisement %@", peripheral, RSSI, advertisementData );
-    [_possibleAdapters addObject:peripheral];
+    if ( ![_possibleAdapters containsObject:peripheral] )
+    {
+        [_possibleAdapters addObject:peripheral];
+    }
     peripheral.delegate = self;
+
+    if ( _identifiers.count > 1 )
+    {
+        _rssiSelectionActive = YES;
+        if ( !_rssiByPeripheral ) _rssiByPeripheral = [NSMutableDictionary dictionary];
+        if ( !_connectedCandidates ) _connectedCandidates = [NSMutableArray array];
+        if ( RSSI ) _rssiByPeripheral[peripheral.identifier] = RSSI;
+    }
     
     [[NSNotificationCenter defaultCenter] postNotificationName:LTBTLESerialTransporterDidDiscoverPeripheral object:[NSMutableArray arrayWithObjects:peripheral,advertisementData, nil]];
     [_manager connectPeripheral:peripheral options:nil];
@@ -404,6 +421,23 @@ NSString* const LTBTLESerialTransporterSuccessfullConnectedPeripheral = @"LTBTLE
 
 #pragma mark -
 #pragma mark Helpers
+
+-(void)startAdvertisementScan
+{
+    if ( _manager.isScanning || _adapter )
+    {
+        return;
+    }
+    if ( _useServiceID )
+    {
+        [_manager scanForPeripheralsWithServices:_serviceUUIDs options:nil];
+    }
+    else
+    {
+        [_manager scanForPeripheralsWithServices:nil options:nil];
+    }
+    [[NSNotificationCenter defaultCenter] postNotificationName:LTBTLESerialTransporterDidStartScanning object:nil];
+}
 
 -(void)selectBestRSSICandidate
 {
