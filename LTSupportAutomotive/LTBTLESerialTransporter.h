@@ -22,7 +22,10 @@ typedef void(^LTBTLESerialTransporterConnectionBlock)(NSInputStream* _Nullable i
 @property(strong,nonatomic,readonly) NSNumber* signalStrength;
 @property(nonatomic, assign) BOOL useServiceID;
 
+/// Single saved peripheral (legacy). Prefer `transporterWithIdentifiers:serviceUUIDs:` for MRU lists.
 +(instancetype)transporterWithIdentifier:(nullable NSUUID*)identifier serviceUUIDs:(NSArray<CBUUID*>*)serviceUUIDs;
+/// MRU / known peripheral UUIDs — CoreBluetooth retrieves all, then each is offered a connect attempt.
++(instancetype)transporterWithIdentifiers:(nullable NSArray<NSUUID*>*)identifiers serviceUUIDs:(NSArray<CBUUID*>*)serviceUUIDs;
 -(void)connectWithBlock:(LTBTLESerialTransporterConnectionBlock)block;
 -(void)disconnect;
 /// Call after `LTOBD2Adapter.disconnect` closed streams handed off at connect time.
@@ -34,4 +37,3 @@ typedef void(^LTBTLESerialTransporterConnectionBlock)(NSInputStream* _Nullable i
 @end
 
 NS_ASSUME_NONNULL_END
-

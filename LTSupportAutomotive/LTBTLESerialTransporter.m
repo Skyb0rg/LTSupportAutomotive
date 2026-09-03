@@ -27,7 +27,7 @@ NSString* const LTBTLESerialTransporterSuccessfullConnectedPeripheral = @"LTBTLE
 @implementation LTBTLESerialTransporter
 {
     CBCentralManager* _manager;
-    NSUUID* _identifier;
+    NSArray<NSUUID*>* _identifiers;
     NSArray<CBUUID*>* _serviceUUIDs;
     BOOL _useServiceID;
     CBPeripheral* _adapter;
@@ -52,24 +52,30 @@ NSString* const LTBTLESerialTransporterSuccessfullConnectedPeripheral = @"LTBTLE
 
 +(instancetype)transporterWithIdentifier:(NSUUID*)identifier serviceUUIDs:(NSArray<CBUUID*>*)serviceUUIDs
 {
-    return [[self alloc] initWithIdentifier:identifier serviceUUIDs:serviceUUIDs];
+    NSArray<NSUUID*>* identifiers = identifier ? @[identifier] : nil;
+    return [self transporterWithIdentifiers:identifiers serviceUUIDs:serviceUUIDs];
 }
 
--(instancetype)initWithIdentifier:(NSUUID*)identifier serviceUUIDs:(NSArray<CBUUID*>*)serviceUUIDs
++(instancetype)transporterWithIdentifiers:(NSArray<NSUUID*>*)identifiers serviceUUIDs:(NSArray<CBUUID*>*)serviceUUIDs
+{
+    return [[self alloc] initWithIdentifiers:identifiers serviceUUIDs:serviceUUIDs];
+}
+
+-(instancetype)initWithIdentifiers:(NSArray<NSUUID*>*)identifiers serviceUUIDs:(NSArray<CBUUID*>*)serviceUUIDs
 {
     if ( ! ( self = [super init] ) )
     {
         return nil;
     }
     
-    _identifier = identifier;
+    _identifiers = [identifiers copy];
     _serviceUUIDs = serviceUUIDs;
     _useServiceID = false;
     
     _dispatchQueue = LTSupportAutomotive_backgroundQueue();
     _possibleAdapters = [NSMutableArray array];
     
-    XLOG( @"Created w/ identifier %@, services %@", _identifier, _serviceUUIDs );
+    XLOG( @"Created w/ identifiers %@, services %@", _identifiers, _serviceUUIDs );
     
     return self;
 }
@@ -172,9 +178,9 @@ NSString* const LTBTLESerialTransporterSuccessfullConnectedPeripheral = @"LTBTLE
         return;
     }
     
-    if ( _identifier )
+    if ( _identifiers.count )
     {
-        peripherals = [_manager retrievePeripheralsWithIdentifiers:@[_identifier]];
+        peripherals = [_manager retrievePeripheralsWithIdentifiers:_identifiers];
     }
     if ( !peripherals.count )
     {
@@ -189,10 +195,18 @@ NSString* const LTBTLESerialTransporterSuccessfullConnectedPeripheral = @"LTBTLE
     }
     
     [[NSNotificationCenter defaultCenter] postNotificationName:LTBTLESerialTransporterConnectedPeripherals object:peripherals];
-    CBPeripheral* peripheral = peripherals.firstObject;
-    peripheral.delegate = self;
-    LOG( @"DISCOVER (cached) %@", peripheral );
-    [_manager connectPeripheral:peripheral options:nil];
+    // Offer every known peripheral a connect — typically only the powered dongle succeeds.
+    // First peripheral that exposes serial characteristics becomes `_adapter`.
+    for ( CBPeripheral* peripheral in peripherals )
+    {
+        if ( ![_possibleAdapters containsObject:peripheral] )
+        {
+            [_possibleAdapters addObject:peripheral];
+        }
+        peripheral.delegate = self;
+        LOG( @"DISCOVER (cached) %@", peripheral );
+        [_manager connectPeripheral:peripheral options:nil];
+    }
 }
 
 -(void)centralManager:(CBCentralManager *)central didDiscoverPeripheral:(CBPeripheral*)peripheral advertisementData:(NSDictionary<NSString *,id> *)advertisementData RSSI:(NSNumber *)RSSI
@@ -256,6 +270,14 @@ NSString* const LTBTLESerialTransporterSuccessfullConnectedPeripheral = @"LTBTLE
 
 -(void)peripheral:(CBPeripheral *)peripheral didDiscoverServices:(NSError *)error
 {
+    if ( _adapter && _adapter != peripheral )
+    {
+        LOG( @"[IGNORING] SERVICES %@: already committed to %@", peripheral, _adapter );
+        [_manager cancelPeripheralConnection:peripheral];
+        [_possibleAdapters removeObject:peripheral];
+        return;
+    }
+
     if ( _reader && _writer )
     {
         LOG( @"[IGNORING] SERVICES %@: %@ (streams ready)", peripheral, peripheral.services );
