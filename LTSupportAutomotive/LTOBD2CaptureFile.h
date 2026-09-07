@@ -35,7 +35,7 @@ NS_ASSUME_NONNULL_BEGIN
                               notes:(NSString*)notes
                            contents:(NSDictionary<NSString*,NSArray<NSString*>*>*)contents;
 
--(nullable instancetype)init NS_UNAVAILABLE;
+-(instancetype)init NS_UNAVAILABLE;
 
 -(BOOL)writeAsJSON:(NSString*)path;
 

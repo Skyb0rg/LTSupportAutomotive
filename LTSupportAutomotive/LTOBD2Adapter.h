@@ -68,8 +68,8 @@ extern NSString* const LTOBD2AdapterQueue;
 // lifecycle
 +(nullable instancetype)adapterWithInputStream:(NSInputStream*)inputStream outputStream:(NSOutputStream*)outputStream;
 -(nullable instancetype)initWithInputStream:(NSInputStream*)inputStream outputStream:(NSOutputStream*)outputStream NS_DESIGNATED_INITIALIZER;
--(nullable instancetype)init NS_UNAVAILABLE;
-+(nullable instancetype)new NS_UNAVAILABLE;
+-(instancetype)init NS_UNAVAILABLE;
++(instancetype)new NS_UNAVAILABLE;
 
 // connection handling
 -(void)connect;
