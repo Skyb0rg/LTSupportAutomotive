@@ -38,7 +38,7 @@ NSString* LTDataToString( NSData* d )
     return [[s stringByReplacingOccurrencesOfString:@"\n" withString:@"\\n"] stringByReplacingOccurrencesOfString:@"\r" withString:@"\\r"];
 }
 
-dispatch_queue_t LTSupportAutomotive_backgroundQueue() {
+dispatch_queue_t LTSupportAutomotive_backgroundQueue(void) {
     static dispatch_once_t queueCreationGuard;
     static dispatch_queue_t queue;
     dispatch_once(&queueCreationGuard, ^{
