@@ -249,6 +249,14 @@ NSString* const LTBTLESerialTransporterSuccessfullConnectedPeripheral = @"LTBTLE
         if ( !_connectedCandidates ) _connectedCandidates = [NSMutableArray array];
         if ( RSSI ) _rssiByPeripheral[peripheral.identifier] = RSSI;
     }
+
+    // Cached retrieve + ad scan can both see the same MRU dongle. A second
+    // connectPeripheral often yields duplicate didConnect / GATT callbacks.
+    if ( peripheral.state == CBPeripheralStateConnecting || peripheral.state == CBPeripheralStateConnected )
+    {
+        LOG( @"[IGNORING] DISCOVER %@ already connecting/connected — skip connectPeripheral", peripheral );
+        return;
+    }
     
     [[NSNotificationCenter defaultCenter] postNotificationName:LTBTLESerialTransporterDidDiscoverPeripheral object:[NSMutableArray arrayWithObjects:peripheral,advertisementData, nil]];
     [_manager connectPeripheral:peripheral options:nil];
@@ -257,16 +265,32 @@ NSString* const LTBTLESerialTransporterSuccessfullConnectedPeripheral = @"LTBTLE
 -(void)centralManager:(CBCentralManager *)central didConnectPeripheral:(CBPeripheral *)peripheral
 {
     LOG( @"CONNECT %@", peripheral );
+
+    if ( !_connectionBlock || (_inputStream && _outputStream) )
+    {
+        LOG( @"[IGNORING] CONNECT %@ — connection already handed off", peripheral );
+        return;
+    }
     
     if ( _rssiSelectionActive && !_adapter )
     {
-        [_connectedCandidates addObject:peripheral];
+        if ( ![_connectedCandidates containsObject:peripheral] )
+        {
+            [_connectedCandidates addObject:peripheral];
+        }
         [peripheral readRSSI];
         
         // Schedule selection after a short window so multiple peripherals can report RSSI.
         // Each new connect resets the timer to allow late responders.
         [NSObject cancelPreviousPerformRequestsWithTarget:self selector:@selector(selectBestRSSICandidate) object:nil];
         [self performSelector:@selector(selectBestRSSICandidate) withObject:nil afterDelay:1.5];
+        return;
+    }
+
+    // Duplicate didConnect (cached + scan) — don't restart GATT mid-flight.
+    if ( _adapter == peripheral && (_reader || _writer) )
+    {
+        LOG( @"[IGNORING] CONNECT %@ — GATT already in progress", peripheral );
         return;
     }
     
@@ -363,6 +387,14 @@ NSString* const LTBTLESerialTransporterSuccessfullConnectedPeripheral = @"LTBTLE
 
 -(void)peripheral:(CBPeripheral *)peripheral didDiscoverCharacteristicsForService:(CBService *)service error:(NSError *)error
 {
+    // Cached reconnect + advertisement scan can deliver this twice; calling
+    // connectionAttemptSucceeded again would invoke a nil _connectionBlock (EXC_BAD_ACCESS).
+    if ( !_connectionBlock || (_inputStream && _outputStream) )
+    {
+        LOG( @"[IGNORING] CHARACTERISTICS %@ — connection already handed off", peripheral );
+        return;
+    }
+
     for ( CBCharacteristic* characteristic in service.characteristics )
     {
         if ( characteristic.properties & CBCharacteristicPropertyNotify )
@@ -494,18 +526,33 @@ NSString* const LTBTLESerialTransporterSuccessfullConnectedPeripheral = @"LTBTLE
 
 -(void)connectionAttemptSucceeded
 {
+    if ( !_connectionBlock )
+    {
+        LOG( @"[IGNORING] connectionAttemptSucceeded — connection block already consumed" );
+        return;
+    }
+
+    LTBTLESerialTransporterConnectionBlock block = _connectionBlock;
+    _connectionBlock = nil;
+
     _inputStream = [[LTBTLEReadCharacteristicStream alloc] initWithCharacteristic:_reader];
     _outputStream = [[LTBTLEWriteCharacteristicStream alloc] initToCharacteristic:_writer];
     _adapterOwnsStreams = YES;
-    _connectionBlock( _inputStream, _outputStream );
-    _connectionBlock = nil;
+    block( _inputStream, _outputStream );
     [[NSNotificationCenter defaultCenter] postNotificationName:LTBTLESerialTransporterSuccessfullConnectedPeripheral object:_adapter];
 }
 
 -(void)connectionAttemptFailed
 {
-    _connectionBlock( nil, nil );
+    if ( !_connectionBlock )
+    {
+        LOG( @"[IGNORING] connectionAttemptFailed — connection block already consumed" );
+        return;
+    }
+
+    LTBTLESerialTransporterConnectionBlock block = _connectionBlock;
     _connectionBlock = nil;
+    block( nil, nil );
 }
 
 @end
