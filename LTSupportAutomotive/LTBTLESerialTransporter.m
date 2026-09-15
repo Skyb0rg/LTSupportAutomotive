@@ -134,6 +134,15 @@ NSString* const LTBTLESerialTransporterSuccessfullConnectedPeripheral = @"LTBTLE
 
 -(void)startUpdatingSignalStrengthWithInterval:(NSTimeInterval)interval
 {
+    // scheduledTimer binds to the current run loop — always create/invalidate on main.
+    if ( ![NSThread isMainThread] )
+    {
+        dispatch_async( dispatch_get_main_queue(), ^{
+            [self startUpdatingSignalStrengthWithInterval:interval];
+        } );
+        return;
+    }
+
     [self stopUpdatingSignalStrength];
     
     _signalStrengthUpdateTimer = [NSTimer scheduledTimerWithTimeInterval:interval target:self selector:@selector(onSignalStrengthUpdateTimerFired:) userInfo:nil repeats:YES];
@@ -141,8 +150,19 @@ NSString* const LTBTLESerialTransporterSuccessfullConnectedPeripheral = @"LTBTLE
 
 -(void)stopUpdatingSignalStrength
 {
-    [_signalStrengthUpdateTimer invalidate];
+    // NSTimer invalidate is not thread-safe; disconnect often runs on the BLE queue
+    // while the app also stops RSSI on main (Build 75 Organizer crash in CFRunLoopTimerInvalidate).
+    if ( ![NSThread isMainThread] )
+    {
+        dispatch_async( dispatch_get_main_queue(), ^{
+            [self stopUpdatingSignalStrength];
+        } );
+        return;
+    }
+
+    NSTimer* timer = _signalStrengthUpdateTimer;
     _signalStrengthUpdateTimer = nil;
+    [timer invalidate];
 }
 
 #pragma mark -
