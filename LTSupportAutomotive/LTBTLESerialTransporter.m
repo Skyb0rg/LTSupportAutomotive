@@ -111,7 +111,21 @@ NSString* const LTBTLESerialTransporterSuccessfullConnectedPeripheral = @"LTBTLE
 {
     [NSObject cancelPreviousPerformRequestsWithTarget:self selector:@selector(selectBestRSSICandidate) object:nil];
     _rssiSelectionActive = NO;
-    [self stopUpdatingSignalStrength];
+
+    // Ensure the RSSI timer is fully invalidated on main *before* tearing down
+    // CoreBluetooth state. Async hop left a window where the timer could still
+    // fire (or a pending main block could touch a half-torn transporter) —
+    // Build 78 device crashes: PAC / objc_msgSend on the main queue during reconnect.
+    if ( [NSThread isMainThread] )
+    {
+        [self stopUpdatingSignalStrength];
+    }
+    else
+    {
+        dispatch_sync( dispatch_get_main_queue(), ^{
+            [self stopUpdatingSignalStrength];
+        } );
+    }
     
     if ( ! _adapterOwnsStreams )
     {
@@ -126,6 +140,7 @@ NSString* const LTBTLESerialTransporterSuccessfullConnectedPeripheral = @"LTBTLE
     {
         [_manager cancelPeripheralConnection:_adapter];
     }
+    _adapter = nil;
     
     [_possibleAdapters enumerateObjectsUsingBlock:^(CBPeripheral * _Nonnull peripheral, NSUInteger idx, BOOL * _Nonnull stop) {
         [self->_manager cancelPeripheralConnection:peripheral];
@@ -137,7 +152,7 @@ NSString* const LTBTLESerialTransporterSuccessfullConnectedPeripheral = @"LTBTLE
     // scheduledTimer binds to the current run loop — always create/invalidate on main.
     if ( ![NSThread isMainThread] )
     {
-        dispatch_async( dispatch_get_main_queue(), ^{
+        dispatch_sync( dispatch_get_main_queue(), ^{
             [self startUpdatingSignalStrengthWithInterval:interval];
         } );
         return;
@@ -150,11 +165,11 @@ NSString* const LTBTLESerialTransporterSuccessfullConnectedPeripheral = @"LTBTLE
 
 -(void)stopUpdatingSignalStrength
 {
-    // NSTimer invalidate is not thread-safe; disconnect often runs on the BLE queue
-    // while the app also stops RSSI on main (Build 75 Organizer crash in CFRunLoopTimerInvalidate).
+    // NSTimer invalidate is not thread-safe. Prefer sync hop so callers (disconnect /
+    // teardown) never continue while the timer is still live on main.
     if ( ![NSThread isMainThread] )
     {
-        dispatch_async( dispatch_get_main_queue(), ^{
+        dispatch_sync( dispatch_get_main_queue(), ^{
             [self stopUpdatingSignalStrength];
         } );
         return;
@@ -170,12 +185,13 @@ NSString* const LTBTLESerialTransporterSuccessfullConnectedPeripheral = @"LTBTLE
 
 -(void)onSignalStrengthUpdateTimerFired:(NSTimer*)timer
 {
-    if ( _adapter.state != CBPeripheralStateConnected )
+    CBPeripheral* adapter = _adapter;
+    if ( adapter == nil || adapter.state != CBPeripheralStateConnected )
     {
         return;
     }
     
-    [_adapter readRSSI];
+    [adapter readRSSI];
 }
 
 #pragma mark -
