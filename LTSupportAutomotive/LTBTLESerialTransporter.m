@@ -238,6 +238,12 @@ NSString* const LTBTLESerialTransporterSuccessfullConnectedPeripheral = @"LTBTLE
             _rssiByPeripheral = [NSMutableDictionary dictionary];
             _connectedCandidates = [NSMutableArray array];
         }
+        // Do NOT connectPeripheral on every cached MRU entry up front. A stale
+        // CBPeripheral often sticks in Connecting; didDiscover then skips the same
+        // UUID as "already connecting" — ads are ignored and only pair-new (no
+        // identifiers) can attach (seen with IOS-Vlink after pause). Wait for a
+        // live advertisement for disconnected peripherals; only resume GATT when
+        // CoreBluetooth already reports Connected.
         for ( CBPeripheral* peripheral in peripherals )
         {
             if ( ![_possibleAdapters containsObject:peripheral] )
@@ -245,11 +251,17 @@ NSString* const LTBTLESerialTransporterSuccessfullConnectedPeripheral = @"LTBTLE
                 [_possibleAdapters addObject:peripheral];
             }
             peripheral.delegate = self;
-            LOG( @"DISCOVER (cached) %@", peripheral );
-            [_manager connectPeripheral:peripheral options:nil];
+            if ( peripheral.state == CBPeripheralStateConnected )
+            {
+                LOG( @"DISCOVER (cached connected) %@", peripheral );
+                [self centralManager:central didDiscoverPeripheral:peripheral advertisementData:@{} RSSI:@127];
+            }
+            else
+            {
+                LOG( @"CACHED (wait for ad) %@ state=%ld", peripheral, (long)peripheral.state );
+            }
         }
-        // Cached connect often hangs on a stale peripheral. Also scan ads, but only
-        // `didDiscover` identifiers that are on the MRU list (never unknown dongles).
+        // Ad scan connects only MRU UUIDs (never unknown dongles).
         [self startAdvertisementScan];
         return;
     }
@@ -286,10 +298,41 @@ NSString* const LTBTLESerialTransporterSuccessfullConnectedPeripheral = @"LTBTLE
         if ( RSSI ) _rssiByPeripheral[peripheral.identifier] = RSSI;
     }
 
-    // Cached retrieve + ad scan can both see the same MRU dongle. A second
-    // connectPeripheral often yields duplicate didConnect / GATT callbacks.
-    if ( peripheral.state == CBPeripheralStateConnecting || peripheral.state == CBPeripheralStateConnected )
+    // Live ad while a prior connect is stuck in Connecting, or Connected without
+    // streams/GATT — cancel and retry / start services instead of ignoring forever.
+    BOOL handedOff = ( _adapter != nil && _inputStream != nil && _outputStream != nil );
+    if ( !handedOff && peripheral.state == CBPeripheralStateConnected )
     {
+        LOG( @"DISCOVER %@ already Connected without streams — discoverServices", peripheral );
+        [[NSNotificationCenter defaultCenter] postNotificationName:LTBTLESerialTransporterDidDiscoverPeripheral object:[NSMutableArray arrayWithObjects:peripheral,advertisementData, nil]];
+        if ( _rssiSelectionActive && !_adapter )
+        {
+            if ( !_connectedCandidates ) _connectedCandidates = [NSMutableArray array];
+            if ( ![_connectedCandidates containsObject:peripheral] )
+            {
+                [_connectedCandidates addObject:peripheral];
+            }
+            if ( RSSI )
+            {
+                if ( !_rssiByPeripheral ) _rssiByPeripheral = [NSMutableDictionary dictionary];
+                _rssiByPeripheral[peripheral.identifier] = RSSI;
+            }
+            [NSObject cancelPreviousPerformRequestsWithTarget:self selector:@selector(selectBestRSSICandidate) object:nil];
+            [self performSelector:@selector(selectBestRSSICandidate) withObject:nil afterDelay:1.5];
+            return;
+        }
+        [peripheral discoverServices:_serviceUUIDs];
+        return;
+    }
+    if ( !handedOff && peripheral.state == CBPeripheralStateConnecting )
+    {
+        LOG( @"DISCOVER %@ stale Connecting — cancel and reconnect", peripheral );
+        [_manager cancelPeripheralConnection:peripheral];
+        // Fall through to connectPeripheral; CoreBluetooth queues after cancel.
+    }
+    else if ( peripheral.state == CBPeripheralStateConnecting || peripheral.state == CBPeripheralStateConnected )
+    {
+        // Already handed off (streams live) or mid-GATT — avoid duplicate connect.
         LOG( @"[IGNORING] DISCOVER %@ already connecting/connected — skip connectPeripheral", peripheral );
         return;
     }
