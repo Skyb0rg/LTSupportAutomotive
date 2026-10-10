@@ -111,6 +111,7 @@ NSString* const LTBTLESerialTransporterSuccessfullConnectedPeripheral = @"LTBTLE
 {
     [NSObject cancelPreviousPerformRequestsWithTarget:self selector:@selector(selectBestRSSICandidate) object:nil];
     [NSObject cancelPreviousPerformRequestsWithTarget:self selector:@selector(connectNewestCachedPeripheralIfNeeded) object:nil];
+    [NSObject cancelPreviousPerformRequestsWithTarget:self selector:@selector(retrieveAndConnectNewestIfNeeded) object:nil];
     _rssiSelectionActive = NO;
 
     // Ensure the RSSI timer is fully invalidated on main *before* tearing down
@@ -228,25 +229,29 @@ NSString* const LTBTLESerialTransporterSuccessfullConnectedPeripheral = @"LTBTLE
         }
     }
 
-    NSArray<CBPeripheral*>* peripherals = nil;
     if ( _identifiers.count )
     {
-        peripherals = [_manager retrievePeripheralsWithIdentifiers:_identifiers];
-        [[NSNotificationCenter defaultCenter] postNotificationName:LTBTLESerialTransporterConnectedPeripherals object:peripherals];
-        if ( peripherals.count > 1 )
+        if ( _identifiers.count > 1 )
         {
             _rssiSelectionActive = YES;
             _rssiByPeripheral = [NSMutableDictionary dictionary];
             _connectedCandidates = [NSMutableArray array];
         }
-        // Prefer live ads over mass connectPeripheral on every MRU UUID (stale
-        // Connecting blocked ads — only pair-new attached). But CoreBluetooth often
-        // withholds didDiscover for peripherals just returned from retrieve — so
-        // pair-new (no retrieve) sees ads while known-ids waits forever. Resume
-        // GATT if already Connected; otherwise wait briefly for an ad, then
-        // direct-connect only the newest MRU (identifiers[0]).
-        for ( CBPeripheral* peripheral in peripherals )
+        // Known-ID reconnect must behave like pair-new for discovery: scan first.
+        // retrievePeripheralsWithIdentifiers BEFORE scan suppresses didDiscover for
+        // those UUIDs (device log 2026-10-10 evening: retrieve lists IOS-Vlink s0,
+        // zero BLE discover during known-ids; pair-new discovers in <50ms). Only
+        // resume peripherals already Connected at the OS level; never prime the
+        // cache with Disconnected retrieve results before scanning.
+        NSArray<CBPeripheral*>* alreadyConnected = [_manager retrieveConnectedPeripheralsWithServices:_serviceUUIDs];
+        NSMutableArray<CBPeripheral*>* mruConnected = [NSMutableArray array];
+        for ( CBPeripheral* peripheral in alreadyConnected )
         {
+            if ( ![_identifiers containsObject:peripheral.identifier] )
+            {
+                continue;
+            }
+            [mruConnected addObject:peripheral];
             if ( ![_possibleAdapters containsObject:peripheral] )
             {
                 [_possibleAdapters addObject:peripheral];
@@ -254,20 +259,18 @@ NSString* const LTBTLESerialTransporterSuccessfullConnectedPeripheral = @"LTBTLE
             peripheral.delegate = self;
             if ( peripheral.state == CBPeripheralStateConnected )
             {
-                LOG( @"DISCOVER (cached connected) %@", peripheral );
+                LOG( @"DISCOVER (already connected MRU) %@", peripheral );
                 [self centralManager:central didDiscoverPeripheral:peripheral advertisementData:@{} RSSI:@127];
             }
-            else
-            {
-                LOG( @"CACHED (wait for ad) %@ state=%ld", peripheral, (long)peripheral.state );
-            }
         }
+        [[NSNotificationCenter defaultCenter] postNotificationName:LTBTLESerialTransporterConnectedPeripherals object:mruConnected];
         // Ad scan connects only MRU UUIDs (never unknown dongles).
         [self startAdvertisementScan];
+        // Last resort after ads had time: retrieve + one direct connect on newest MRU.
         if ( !_adapter )
         {
-            [NSObject cancelPreviousPerformRequestsWithTarget:self selector:@selector(connectNewestCachedPeripheralIfNeeded) object:nil];
-            [self performSelector:@selector(connectNewestCachedPeripheralIfNeeded) withObject:nil afterDelay:2.0];
+            [NSObject cancelPreviousPerformRequestsWithTarget:self selector:@selector(retrieveAndConnectNewestIfNeeded) object:nil];
+            [self performSelector:@selector(retrieveAndConnectNewestIfNeeded) withObject:nil afterDelay:8.0];
         }
         return;
     }
@@ -561,8 +564,28 @@ NSString* const LTBTLESerialTransporterSuccessfullConnectedPeripheral = @"LTBTLE
     [[NSNotificationCenter defaultCenter] postNotificationName:LTBTLESerialTransporterDidStartScanning object:nil];
 }
 
-/// After retrieve + wait-for-ad: if no live ad attached streams, try a single
-/// direct connect on the newest MRU only (avoids mass Connecting on every UUID).
+/// Late fallback only: retrieve MRU + one direct connect on newest UUID.
+/// Must not run before the ad scan has had a real window (see didUpdateState).
+-(void)retrieveAndConnectNewestIfNeeded
+{
+    if ( _adapter || !_connectionBlock || !_identifiers.count || !_manager )
+    {
+        return;
+    }
+    NSArray<CBPeripheral*>* peripherals = [_manager retrievePeripheralsWithIdentifiers:_identifiers];
+    [[NSNotificationCenter defaultCenter] postNotificationName:LTBTLESerialTransporterConnectedPeripherals object:peripherals];
+    for ( CBPeripheral* peripheral in peripherals )
+    {
+        if ( ![_possibleAdapters containsObject:peripheral] )
+        {
+            [_possibleAdapters addObject:peripheral];
+        }
+        peripheral.delegate = self;
+    }
+    [self connectNewestCachedPeripheralIfNeeded];
+}
+
+/// Direct connect on the newest MRU only (avoids mass Connecting on every UUID).
 -(void)connectNewestCachedPeripheralIfNeeded
 {
     if ( _adapter || !_connectionBlock || !_identifiers.count )
