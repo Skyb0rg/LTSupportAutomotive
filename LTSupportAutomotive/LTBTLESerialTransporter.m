@@ -110,6 +110,7 @@ NSString* const LTBTLESerialTransporterSuccessfullConnectedPeripheral = @"LTBTLE
 -(void)disconnect
 {
     [NSObject cancelPreviousPerformRequestsWithTarget:self selector:@selector(selectBestRSSICandidate) object:nil];
+    [NSObject cancelPreviousPerformRequestsWithTarget:self selector:@selector(connectNewestCachedPeripheralIfNeeded) object:nil];
     _rssiSelectionActive = NO;
 
     // Ensure the RSSI timer is fully invalidated on main *before* tearing down
@@ -238,12 +239,12 @@ NSString* const LTBTLESerialTransporterSuccessfullConnectedPeripheral = @"LTBTLE
             _rssiByPeripheral = [NSMutableDictionary dictionary];
             _connectedCandidates = [NSMutableArray array];
         }
-        // Do NOT connectPeripheral on every cached MRU entry up front. A stale
-        // CBPeripheral often sticks in Connecting; didDiscover then skips the same
-        // UUID as "already connecting" — ads are ignored and only pair-new (no
-        // identifiers) can attach (seen with IOS-Vlink after pause). Wait for a
-        // live advertisement for disconnected peripherals; only resume GATT when
-        // CoreBluetooth already reports Connected.
+        // Prefer live ads over mass connectPeripheral on every MRU UUID (stale
+        // Connecting blocked ads — only pair-new attached). But CoreBluetooth often
+        // withholds didDiscover for peripherals just returned from retrieve — so
+        // pair-new (no retrieve) sees ads while known-ids waits forever. Resume
+        // GATT if already Connected; otherwise wait briefly for an ad, then
+        // direct-connect only the newest MRU (identifiers[0]).
         for ( CBPeripheral* peripheral in peripherals )
         {
             if ( ![_possibleAdapters containsObject:peripheral] )
@@ -263,6 +264,11 @@ NSString* const LTBTLESerialTransporterSuccessfullConnectedPeripheral = @"LTBTLE
         }
         // Ad scan connects only MRU UUIDs (never unknown dongles).
         [self startAdvertisementScan];
+        if ( !_adapter )
+        {
+            [NSObject cancelPreviousPerformRequestsWithTarget:self selector:@selector(connectNewestCachedPeripheralIfNeeded) object:nil];
+            [self performSelector:@selector(connectNewestCachedPeripheralIfNeeded) withObject:nil afterDelay:2.0];
+        }
         return;
     }
 
@@ -539,15 +545,63 @@ NSString* const LTBTLESerialTransporterSuccessfullConnectedPeripheral = @"LTBTLE
     {
         return;
     }
+    // Known-ID reconnect: allow duplicate ads so retrieve'd MRU UUIDs still
+    // surface in didDiscover (default scan often suppresses them).
+    NSDictionary* options = _identifiers.count
+        ? @{ CBCentralManagerScanOptionAllowDuplicatesKey: @YES }
+        : nil;
     if ( _useServiceID )
     {
-        [_manager scanForPeripheralsWithServices:_serviceUUIDs options:nil];
+        [_manager scanForPeripheralsWithServices:_serviceUUIDs options:options];
     }
     else
     {
-        [_manager scanForPeripheralsWithServices:nil options:nil];
+        [_manager scanForPeripheralsWithServices:nil options:options];
     }
     [[NSNotificationCenter defaultCenter] postNotificationName:LTBTLESerialTransporterDidStartScanning object:nil];
+}
+
+/// After retrieve + wait-for-ad: if no live ad attached streams, try a single
+/// direct connect on the newest MRU only (avoids mass Connecting on every UUID).
+-(void)connectNewestCachedPeripheralIfNeeded
+{
+    if ( _adapter || !_connectionBlock || !_identifiers.count )
+    {
+        return;
+    }
+    NSUUID* newestID = _identifiers.firstObject;
+    CBPeripheral* newest = nil;
+    for ( CBPeripheral* peripheral in _possibleAdapters )
+    {
+        if ( [peripheral.identifier isEqual:newestID] )
+        {
+            newest = peripheral;
+            break;
+        }
+    }
+    if ( !newest )
+    {
+        LOG( @"CACHED (direct connect) newest %@ not in possibleAdapters", newestID );
+        return;
+    }
+    if ( newest.state == CBPeripheralStateConnected )
+    {
+        LOG( @"CACHED (direct connect) %@ already Connected — discoverServices", newest );
+        [newest discoverServices:_serviceUUIDs];
+        return;
+    }
+    if ( newest.state == CBPeripheralStateConnecting )
+    {
+        LOG( @"CACHED (direct connect) %@ still Connecting — cancel + retry", newest );
+        [_manager cancelPeripheralConnection:newest];
+    }
+    else if ( newest.state != CBPeripheralStateDisconnected )
+    {
+        LOG( @"CACHED (direct connect) %@ skip state=%ld", newest, (long)newest.state );
+        return;
+    }
+    LOG( @"CACHED (direct connect fallback) %@", newest );
+    [_manager connectPeripheral:newest options:nil];
 }
 
 -(void)selectBestRSSICandidate
