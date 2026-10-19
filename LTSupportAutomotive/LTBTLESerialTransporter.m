@@ -307,8 +307,11 @@ NSString* const LTBTLESerialTransporterSuccessfullConnectedPeripheral = @"LTBTLE
         if ( RSSI ) _rssiByPeripheral[peripheral.identifier] = RSSI;
     }
 
-    // Live ad while a prior connect is stuck in Connecting, or Connected without
-    // streams/GATT — cancel and retry / start services instead of ignoring forever.
+    // Live ad while Connected without streams/GATT — start services instead of ignoring.
+    // Do NOT cancel+reconnect on every Connecting ad: known-ids uses AllowDuplicates, so
+    // that thrash (0→3→0) prevents GATT from ever completing (device log 2026-10-18
+    // 13:19–14:06; pair-new without duplicates succeeded). Stuck Connecting is healed by
+    // retrieveAndConnectNewestIfNeeded (8s) and the app disconnect timer.
     BOOL handedOff = ( _adapter != nil && _inputStream != nil && _outputStream != nil );
     if ( !handedOff && peripheral.state == CBPeripheralStateConnected )
     {
@@ -333,15 +336,9 @@ NSString* const LTBTLESerialTransporterSuccessfullConnectedPeripheral = @"LTBTLE
         [peripheral discoverServices:_serviceUUIDs];
         return;
     }
-    if ( !handedOff && peripheral.state == CBPeripheralStateConnecting )
+    if ( peripheral.state == CBPeripheralStateConnecting || (handedOff && peripheral.state == CBPeripheralStateConnected) )
     {
-        LOG( @"DISCOVER %@ stale Connecting — cancel and reconnect", peripheral );
-        [_manager cancelPeripheralConnection:peripheral];
-        // Fall through to connectPeripheral; CoreBluetooth queues after cancel.
-    }
-    else if ( peripheral.state == CBPeripheralStateConnecting || peripheral.state == CBPeripheralStateConnected )
-    {
-        // Already handed off (streams live) or mid-GATT — avoid duplicate connect.
+        // Mid-connect or streams live — wait for didConnect / keep GATT; no cancel thrash.
         LOG( @"[IGNORING] DISCOVER %@ already connecting/connected — skip connectPeripheral", peripheral );
         return;
     }
