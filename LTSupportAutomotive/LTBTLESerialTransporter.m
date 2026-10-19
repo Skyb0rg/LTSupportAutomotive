@@ -50,6 +50,8 @@ NSString* const LTBTLESerialTransporterSuccessfullConnectedPeripheral = @"LTBTLE
     BOOL _rssiSelectionActive;
     NSMutableDictionary<NSUUID*, NSNumber*>* _rssiByPeripheral;
     NSMutableArray<CBPeripheral*>* _connectedCandidates;
+    uint64_t _rssiSelectGeneration;
+    uint64_t _directConnectFallbackGeneration;
 }
 
 #pragma mark -
@@ -109,9 +111,8 @@ NSString* const LTBTLESerialTransporterSuccessfullConnectedPeripheral = @"LTBTLE
 
 -(void)disconnect
 {
-    [NSObject cancelPreviousPerformRequestsWithTarget:self selector:@selector(selectBestRSSICandidate) object:nil];
-    [NSObject cancelPreviousPerformRequestsWithTarget:self selector:@selector(connectNewestCachedPeripheralIfNeeded) object:nil];
-    [NSObject cancelPreviousPerformRequestsWithTarget:self selector:@selector(retrieveAndConnectNewestIfNeeded) object:nil];
+    _rssiSelectGeneration += 1;
+    _directConnectFallbackGeneration += 1;
     _rssiSelectionActive = NO;
 
     // Ensure the RSSI timer is fully invalidated on main *before* tearing down
@@ -269,8 +270,17 @@ NSString* const LTBTLESerialTransporterSuccessfullConnectedPeripheral = @"LTBTLE
         // Last resort after ads had time: retrieve + one direct connect on newest MRU.
         if ( !_adapter )
         {
-            [NSObject cancelPreviousPerformRequestsWithTarget:self selector:@selector(retrieveAndConnectNewestIfNeeded) object:nil];
-            [self performSelector:@selector(retrieveAndConnectNewestIfNeeded) withObject:nil afterDelay:8.0];
+            // performSelector:afterDelay is tied to the current run loop — CB callbacks
+            // run on a GCD queue with no run loop, so those timers never fired (log
+            // 2026-10-19: known-ids discover, no ELM; pair-new OK). Use dispatch_after.
+            uint64_t gen = ++_directConnectFallbackGeneration;
+            dispatch_after( dispatch_time( DISPATCH_TIME_NOW, (int64_t)(8.0 * NSEC_PER_SEC) ), _dispatchQueue, ^{
+                if ( gen != self->_directConnectFallbackGeneration )
+                {
+                    return;
+                }
+                [self retrieveAndConnectNewestIfNeeded];
+            } );
         }
         return;
     }
@@ -329,8 +339,14 @@ NSString* const LTBTLESerialTransporterSuccessfullConnectedPeripheral = @"LTBTLE
                 if ( !_rssiByPeripheral ) _rssiByPeripheral = [NSMutableDictionary dictionary];
                 _rssiByPeripheral[peripheral.identifier] = RSSI;
             }
-            [NSObject cancelPreviousPerformRequestsWithTarget:self selector:@selector(selectBestRSSICandidate) object:nil];
-            [self performSelector:@selector(selectBestRSSICandidate) withObject:nil afterDelay:1.5];
+            uint64_t gen = ++_rssiSelectGeneration;
+            dispatch_after( dispatch_time( DISPATCH_TIME_NOW, (int64_t)(1.5 * NSEC_PER_SEC) ), _dispatchQueue, ^{
+                if ( gen != self->_rssiSelectGeneration )
+                {
+                    return;
+                }
+                [self selectBestRSSICandidate];
+            } );
             return;
         }
         [peripheral discoverServices:_serviceUUIDs];
@@ -366,9 +382,15 @@ NSString* const LTBTLESerialTransporterSuccessfullConnectedPeripheral = @"LTBTLE
         [peripheral readRSSI];
         
         // Schedule selection after a short window so multiple peripherals can report RSSI.
-        // Each new connect resets the timer to allow late responders.
-        [NSObject cancelPreviousPerformRequestsWithTarget:self selector:@selector(selectBestRSSICandidate) object:nil];
-        [self performSelector:@selector(selectBestRSSICandidate) withObject:nil afterDelay:1.5];
+        // dispatch_after on the CB queue — not performSelector:afterDelay (no run loop).
+        uint64_t gen = ++_rssiSelectGeneration;
+        dispatch_after( dispatch_time( DISPATCH_TIME_NOW, (int64_t)(1.5 * NSEC_PER_SEC) ), _dispatchQueue, ^{
+            if ( gen != self->_rssiSelectGeneration )
+            {
+                return;
+            }
+            [self selectBestRSSICandidate];
+        } );
         return;
     }
 
@@ -612,8 +634,9 @@ NSString* const LTBTLESerialTransporterSuccessfullConnectedPeripheral = @"LTBTLE
     }
     if ( newest.state == CBPeripheralStateConnecting )
     {
-        LOG( @"CACHED (direct connect) %@ still Connecting — cancel + retry", newest );
-        [_manager cancelPeripheralConnection:newest];
+        // Same rule as AllowDuplicates thrash fix — do not cancel mid-connect.
+        LOG( @"CACHED (direct connect) %@ still Connecting — wait for didConnect", newest );
+        return;
     }
     else if ( newest.state != CBPeripheralStateDisconnected )
     {
