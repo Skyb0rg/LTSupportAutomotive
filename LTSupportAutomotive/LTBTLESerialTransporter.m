@@ -52,6 +52,8 @@ NSString* const LTBTLESerialTransporterSuccessfullConnectedPeripheral = @"LTBTLE
     NSMutableArray<CBPeripheral*>* _connectedCandidates;
     uint64_t _rssiSelectGeneration;
     uint64_t _directConnectFallbackGeneration;
+    uint64_t _connectingWatchdogGeneration;
+    NSMutableSet<NSUUID*>* _advertisedIdentifiers;
 }
 
 #pragma mark -
@@ -81,6 +83,7 @@ NSString* const LTBTLESerialTransporterSuccessfullConnectedPeripheral = @"LTBTLE
     
     _dispatchQueue = LTSupportAutomotive_backgroundQueue();
     _possibleAdapters = [NSMutableArray array];
+    _advertisedIdentifiers = [NSMutableSet set];
     
     XLOG( @"Created w/ identifiers %@, services %@", _identifiers, _serviceUUIDs );
     
@@ -113,7 +116,9 @@ NSString* const LTBTLESerialTransporterSuccessfullConnectedPeripheral = @"LTBTLE
 {
     _rssiSelectGeneration += 1;
     _directConnectFallbackGeneration += 1;
+    _connectingWatchdogGeneration += 1;
     _rssiSelectionActive = NO;
+    [_advertisedIdentifiers removeAllObjects];
 
     // Ensure the RSSI timer is fully invalidated on main *before* tearing down
     // CoreBluetooth state. Async hop left a window where the timer could still
@@ -307,6 +312,13 @@ NSString* const LTBTLESerialTransporterSuccessfullConnectedPeripheral = @"LTBTLE
     {
         [_possibleAdapters addObject:peripheral];
     }
+    // RSSI 127 is our synthetic "already connected" sentinel — not a live ad.
+    // Live ads mark the UUID so the 8s retrieve fallback won't connectPeripheral
+    // to a powered-off cached dongle (log 2026-10-23 zombie: retrieve s0, hang Connecting).
+    if ( RSSI == nil || RSSI.integerValue != 127 )
+    {
+        [_advertisedIdentifiers addObject:peripheral.identifier];
+    }
     peripheral.delegate = self;
 
     if ( _identifiers.count > 1 )
@@ -361,11 +373,13 @@ NSString* const LTBTLESerialTransporterSuccessfullConnectedPeripheral = @"LTBTLE
     
     [[NSNotificationCenter defaultCenter] postNotificationName:LTBTLESerialTransporterDidDiscoverPeripheral object:[NSMutableArray arrayWithObjects:peripheral,advertisementData, nil]];
     [_manager connectPeripheral:peripheral options:nil];
+    [self scheduleConnectingWatchdogForPeripheral:peripheral];
 }
 
 -(void)centralManager:(CBCentralManager *)central didConnectPeripheral:(CBPeripheral *)peripheral
 {
     LOG( @"CONNECT %@", peripheral );
+    _connectingWatchdogGeneration += 1;
 
     if ( !_connectionBlock || (_inputStream && _outputStream) )
     {
@@ -407,6 +421,8 @@ NSString* const LTBTLESerialTransporterSuccessfullConnectedPeripheral = @"LTBTLE
 -(void)centralManager:(CBCentralManager *)central didFailToConnectPeripheral:(CBPeripheral *)peripheral error:(NSError *)error
 {
     LOG( @"Failed to connect %@: %@", peripheral, error );
+    _connectingWatchdogGeneration += 1;
+    [self startAdvertisementScan];
 }
 
 -(void)centralManager:(CBCentralManager *)central didDisconnectPeripheral:(CBPeripheral *)peripheral error:(NSError *)error
@@ -561,6 +577,44 @@ NSString* const LTBTLESerialTransporterSuccessfullConnectedPeripheral = @"LTBTLE
 #pragma mark -
 #pragma mark Helpers
 
+/// Cancel a stuck Connecting attempt so a later advertisement can connect
+/// (unplug → connectPeripheral hangs; replug ads were ignored while Connecting).
+-(void)scheduleConnectingWatchdogForPeripheral:(CBPeripheral*)peripheral
+{
+    if ( !peripheral || !_manager )
+    {
+        return;
+    }
+    NSUUID* peripheralID = peripheral.identifier;
+    uint64_t gen = ++_connectingWatchdogGeneration;
+    dispatch_after( dispatch_time( DISPATCH_TIME_NOW, (int64_t)(12.0 * NSEC_PER_SEC) ), _dispatchQueue, ^{
+        if ( gen != self->_connectingWatchdogGeneration )
+        {
+            return;
+        }
+        if ( self->_adapter || !self->_connectionBlock || !self->_manager )
+        {
+            return;
+        }
+        CBPeripheral* stuck = nil;
+        for ( CBPeripheral* candidate in self->_possibleAdapters )
+        {
+            if ( [candidate.identifier isEqual:peripheralID] )
+            {
+                stuck = candidate;
+                break;
+            }
+        }
+        if ( !stuck || stuck.state != CBPeripheralStateConnecting )
+        {
+            return;
+        }
+        LOG( @"CONNECTING watchdog — cancel stuck %@ so scan can accept a live ad", stuck );
+        [self->_manager cancelPeripheralConnection:stuck];
+        [self startAdvertisementScan];
+    } );
+}
+
 -(void)startAdvertisementScan
 {
     if ( _manager.isScanning || _adapter )
@@ -635,6 +689,7 @@ NSString* const LTBTLESerialTransporterSuccessfullConnectedPeripheral = @"LTBTLE
     if ( newest.state == CBPeripheralStateConnecting )
     {
         // Same rule as AllowDuplicates thrash fix — do not cancel mid-connect.
+        // Connecting watchdog (12s) will cancel if the dongle is off.
         LOG( @"CACHED (direct connect) %@ still Connecting — wait for didConnect", newest );
         return;
     }
@@ -643,8 +698,17 @@ NSString* const LTBTLESerialTransporterSuccessfullConnectedPeripheral = @"LTBTLE
         LOG( @"CACHED (direct connect) %@ skip state=%ld", newest, (long)newest.state );
         return;
     }
+    // retrievePeripherals returns powered-off dongles as Disconnected — connecting
+    // them hangs until the app scan timeout (log 2026-10-23). Only direct-connect
+    // after a live advertisement in this session.
+    if ( ![_advertisedIdentifiers containsObject:newest.identifier] )
+    {
+        LOG( @"CACHED (direct connect) %@ skip — no live advertisement yet (dongle off?)", newest );
+        return;
+    }
     LOG( @"CACHED (direct connect fallback) %@", newest );
     [_manager connectPeripheral:newest options:nil];
+    [self scheduleConnectingWatchdogForPeripheral:newest];
 }
 
 -(void)selectBestRSSICandidate
